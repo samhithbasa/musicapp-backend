@@ -136,10 +136,8 @@ function runFfmpeg(args) {
 }
 
 async function runMergeJob(videoId) {
-  const videoTemp = path.join(TEMP_DIR, `${videoId}_video.mp4`);
-  const audioTemp = path.join(TEMP_DIR, `${videoId}_audio.m4a`);
-  const mergeTemp = path.join(TEMP_DIR, `${videoId}_1080p_temp.mp4`);
   const finalPath = path.join(TEMP_DIR, `${videoId}_1080p.mp4`);
+  const ytdlpOutput = path.join(TEMP_DIR, `${videoId}_merged.mp4`);
 
   try {
     const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
@@ -150,66 +148,105 @@ async function runMergeJob(videoId) {
       console.log('Using cookies.txt for YouTube authentication');
     }
 
-    // Step 1: Download best 1080p (or lower) video-only stream
-    activeJobs.set(videoId, { progress: 'Downloading HD video stream...', error: null });
-    console.log(`Downloading video for ${videoId}...`);
+    // Single-step: let yt-dlp download best video+audio and merge into mp4
+    activeJobs.set(videoId, { progress: 'Downloading HD video & audio...', error: null });
+    console.log(`Downloading and merging for ${videoId}...`);
     
-    const videoArgs = [
-      '-f', 'bestvideo[height<=1080][ext=mp4]/bestvideo[height<=1080]/bestvideo[ext=mp4]/bestvideo',
-      '-o', videoTemp,
+    // Use yt-dlp's built-in merge — it picks the best available formats
+    // and uses ffmpeg internally to mux them into mp4
+    const args = [
+      '-f', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
+      '--merge-output-format', 'mp4',
+      '-o', ytdlpOutput,
       '--no-playlist',
       '--no-warnings',
-      '--js-runtimes', `node:${process.execPath}`
+      '--js-runtimes', `node:${process.execPath}`,
+      '--ffmpeg-location', ffmpegPath
     ];
+
     if (useCookies) {
-      videoArgs.push('--cookies', cookiesPath);
+      args.push('--cookies', cookiesPath);
     } else {
-      // Only use mobile client if we don't have web browser cookies
-      videoArgs.push('--extractor-args', 'youtube:player_client=ios,android');
+      // Only use mobile client when we don't have browser cookies
+      args.push('--extractor-args', 'youtube:player_client=ios,android');
     }
-    videoArgs.push(youtubeUrl);
-    
-    await runYtdlp(videoArgs);
+    args.push(youtubeUrl);
 
-    // Step 2: Download best audio stream
-    activeJobs.set(videoId, { progress: 'Downloading audio stream...', error: null });
-    console.log(`Downloading audio for ${videoId}...`);
+    try {
+      await runYtdlp(args);
+    } catch (downloadErr) {
+      // On format error, log available formats for debugging then retry with 'best'
+      console.error(`First attempt failed for ${videoId}: ${downloadErr.message}`);
+      console.log(`Listing available formats for ${videoId}...`);
+      
+      try {
+        const listArgs = ['--list-formats', '--no-warnings'];
+        if (useCookies) listArgs.push('--cookies', cookiesPath);
+        listArgs.push(youtubeUrl);
+        const formatList = await runYtdlp(listArgs);
+        console.log(`Available formats for ${videoId}:\n${formatList}`);
+      } catch (_) {
+        console.log('Could not list formats');
+      }
 
-    const audioArgs = [
-      '-f', 'bestaudio[ext=m4a]/bestaudio',
-      '-o', audioTemp,
-      '--no-playlist',
-      '--no-warnings',
-      '--js-runtimes', `node:${process.execPath}`
-    ];
-    if (useCookies) {
-      audioArgs.push('--cookies', cookiesPath);
-    } else {
-      audioArgs.push('--extractor-args', 'youtube:player_client=ios,android');
+      // Retry with the most permissive format selector
+      console.log(`Retrying ${videoId} with fallback format selector...`);
+      activeJobs.set(videoId, { progress: 'Retrying with fallback format...', error: null });
+      
+      const fallbackArgs = [
+        '-f', 'best[height<=1080]/best',
+        '-o', ytdlpOutput,
+        '--no-playlist',
+        '--no-warnings',
+        '--js-runtimes', `node:${process.execPath}`
+      ];
+      if (useCookies) {
+        fallbackArgs.push('--cookies', cookiesPath);
+      }
+      fallbackArgs.push(youtubeUrl);
+      
+      await runYtdlp(fallbackArgs);
     }
-    audioArgs.push(youtubeUrl);
 
-    await runYtdlp(audioArgs);
-
-    // Step 3: Merge using ffmpeg
-    activeJobs.set(videoId, { progress: 'Merging streams with ffmpeg...', error: null });
-    console.log(`Merging video and audio for ${videoId}...`);
-    
-    await runFfmpeg([
-      '-y',
-      '-i', videoTemp,
-      '-i', audioTemp,
-      '-c:v', 'copy',
-      '-c:a', 'aac',
-      '-movflags', '+faststart',
-      mergeTemp
-    ]);
-
-    // Rename to final path only when completely finished and flushed to disk
-    if (fs.existsSync(mergeTemp)) {
-      fs.renameSync(mergeTemp, finalPath);
+    // yt-dlp might add .mp4 extension or the file might be at ytdlpOutput directly
+    // Check for the output file
+    let outputFile = null;
+    if (fs.existsSync(ytdlpOutput)) {
+      outputFile = ytdlpOutput;
+    } else if (fs.existsSync(ytdlpOutput + '.mp4')) {
+      outputFile = ytdlpOutput + '.mp4';
     } else {
-      throw new Error('Merged output file not found after ffmpeg finished');
+      // Search for any file matching the pattern
+      const tempFiles = fs.readdirSync(TEMP_DIR);
+      const match = tempFiles.find(f => f.startsWith(`${videoId}_merged`));
+      if (match) {
+        outputFile = path.join(TEMP_DIR, match);
+      }
+    }
+
+    if (!outputFile) {
+      throw new Error('Downloaded file not found after yt-dlp completed');
+    }
+
+    // If the output isn't already mp4, re-mux with ffmpeg
+    if (outputFile !== finalPath) {
+      if (outputFile.endsWith('.mp4')) {
+        // Already mp4, just rename
+        fs.renameSync(outputFile, finalPath);
+      } else {
+        // Re-mux to mp4
+        activeJobs.set(videoId, { progress: 'Converting to mp4...', error: null });
+        console.log(`Re-muxing ${outputFile} to mp4...`);
+        await runFfmpeg([
+          '-y',
+          '-i', outputFile,
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-movflags', '+faststart',
+          finalPath
+        ]);
+        try { fs.unlinkSync(outputFile); } catch (_) {}
+      }
     }
 
     console.log(`Merge completed successfully for ${videoId}!`);
@@ -219,11 +256,14 @@ async function runMergeJob(videoId) {
     activeJobs.set(videoId, { progress: 'Error', error: err.message });
     throw err;
   } finally {
-    // Clean up temporary files
+    // Clean up any leftover temp files for this videoId
     try {
-      if (fs.existsSync(videoTemp)) fs.unlinkSync(videoTemp);
-      if (fs.existsSync(audioTemp)) fs.unlinkSync(audioTemp);
-      if (fs.existsSync(mergeTemp)) fs.unlinkSync(mergeTemp);
+      const tempFiles = fs.readdirSync(TEMP_DIR);
+      for (const f of tempFiles) {
+        if (f.startsWith(videoId) && !f.endsWith('_1080p.mp4')) {
+          try { fs.unlinkSync(path.join(TEMP_DIR, f)); } catch (_) {}
+        }
+      }
     } catch (_) {}
   }
 }
