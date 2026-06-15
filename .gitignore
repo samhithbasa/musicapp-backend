@@ -1,0 +1,5 @@
+node_modules/
+temp/
+yt-dlp.exe
+yt-dlp
+package-lock.json
