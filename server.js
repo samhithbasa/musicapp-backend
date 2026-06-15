@@ -143,32 +143,48 @@ async function runMergeJob(videoId) {
 
   try {
     const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const cookiesPath = path.join(__dirname, 'cookies.txt');
+    const useCookies = fs.existsSync(cookiesPath);
     
+    if (useCookies) {
+      console.log('Using cookies.txt for YouTube authentication');
+    }
+
     // Step 1: Download best 1080p (or lower) video-only stream
     activeJobs.set(videoId, { progress: 'Downloading HD video stream...', error: null });
     console.log(`Downloading video for ${videoId}...`);
     
-    await runYtdlp([
+    const videoArgs = [
       '-f', 'bestvideo[height<=1080][ext=mp4]/bestvideo[height<=1080]/bestvideo[ext=mp4]/bestvideo',
       '-o', videoTemp,
       '--no-playlist',
       '--no-warnings',
-      '--extractor-args', 'youtube:player_client=ios,android',
-      youtubeUrl
-    ]);
+      '--extractor-args', 'youtube:player_client=ios,android'
+    ];
+    if (useCookies) {
+      videoArgs.push('--cookies', cookiesPath);
+    }
+    videoArgs.push(youtubeUrl);
+    
+    await runYtdlp(videoArgs);
 
     // Step 2: Download best audio stream
     activeJobs.set(videoId, { progress: 'Downloading audio stream...', error: null });
     console.log(`Downloading audio for ${videoId}...`);
 
-    await runYtdlp([
+    const audioArgs = [
       '-f', 'bestaudio[ext=m4a]/bestaudio',
       '-o', audioTemp,
       '--no-playlist',
       '--no-warnings',
-      '--extractor-args', 'youtube:player_client=ios,android',
-      youtubeUrl
-    ]);
+      '--extractor-args', 'youtube:player_client=ios,android'
+    ];
+    if (useCookies) {
+      audioArgs.push('--cookies', cookiesPath);
+    }
+    audioArgs.push(youtubeUrl);
+
+    await runYtdlp(audioArgs);
 
     // Step 3: Merge using ffmpeg
     activeJobs.set(videoId, { progress: 'Merging streams with ffmpeg...', error: null });
