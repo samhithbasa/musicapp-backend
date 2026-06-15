@@ -159,11 +159,13 @@ async function runMergeJob(videoId) {
       '-o', videoTemp,
       '--no-playlist',
       '--no-warnings',
-      '--extractor-args', 'youtube:player_client=ios,android',
       '--js-runtimes', `node:${process.execPath}`
     ];
     if (useCookies) {
       videoArgs.push('--cookies', cookiesPath);
+    } else {
+      // Only use mobile client if we don't have web browser cookies
+      videoArgs.push('--extractor-args', 'youtube:player_client=ios,android');
     }
     videoArgs.push(youtubeUrl);
     
@@ -178,11 +180,12 @@ async function runMergeJob(videoId) {
       '-o', audioTemp,
       '--no-playlist',
       '--no-warnings',
-      '--extractor-args', 'youtube:player_client=ios,android',
       '--js-runtimes', `node:${process.execPath}`
     ];
     if (useCookies) {
       audioArgs.push('--cookies', cookiesPath);
+    } else {
+      audioArgs.push('--extractor-args', 'youtube:player_client=ios,android');
     }
     audioArgs.push(youtubeUrl);
 
