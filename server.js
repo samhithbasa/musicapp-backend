@@ -153,6 +153,7 @@ async function runMergeJob(videoId) {
       '-o', videoTemp,
       '--no-playlist',
       '--no-warnings',
+      '--extractor-args', 'youtube:player_client=ios,android',
       youtubeUrl
     ]);
 
@@ -165,6 +166,7 @@ async function runMergeJob(videoId) {
       '-o', audioTemp,
       '--no-playlist',
       '--no-warnings',
+      '--extractor-args', 'youtube:player_client=ios,android',
       youtubeUrl
     ]);
 
