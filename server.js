@@ -138,7 +138,7 @@ function runFfmpeg(args) {
 async function runMergeJob(videoId) {
   const videoTemp = path.join(TEMP_DIR, `${videoId}_video.mp4`);
   const audioTemp = path.join(TEMP_DIR, `${videoId}_audio.m4a`);
-  const mergeTemp = path.join(TEMP_DIR, `${videoId}_1080p.mp4.tmp`);
+  const mergeTemp = path.join(TEMP_DIR, `${videoId}_1080p_temp.mp4`);
   const finalPath = path.join(TEMP_DIR, `${videoId}_1080p.mp4`);
 
   try {
