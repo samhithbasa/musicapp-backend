@@ -341,9 +341,15 @@ app.get('/stream', (req, res) => {
 
 // GET /spotify-playlist?url=xxx
 app.get('/spotify-playlist', async (req, res) => {
-  const { url } = req.query;
+  let { url } = req.query;
   if (!url) {
     return res.status(400).json({ error: 'Missing url parameter' });
+  }
+
+  // Extract the actual URL from the text if a description is present
+  const match = url.match(/(https?:\/\/[^\s]+)/);
+  if (match) {
+    url = match[1];
   }
 
   try {
