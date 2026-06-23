@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const { execFile, execSync } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
+const spotifyUrlInfo = require('spotify-url-info');
+const { getTracks } = spotifyUrlInfo(fetch);
 
 const app = express();
 const PORT = 3000;
@@ -334,6 +336,28 @@ app.get('/stream', (req, res) => {
       }
     });
     stream.pipe(res);
+  }
+});
+
+// GET /spotify-playlist?url=xxx
+app.get('/spotify-playlist', async (req, res) => {
+  const { url } = req.query;
+  if (!url) {
+    return res.status(400).json({ error: 'Missing url parameter' });
+  }
+
+  try {
+    console.log(`Fetching Spotify playlist tracks for URL: ${url}`);
+    const tracks = await getTracks(url);
+    const mappedTracks = tracks.map(t => ({
+      title: t.name || 'Unknown',
+      artists: t.artist || 'Unknown Artist',
+      durationMs: t.duration || 0
+    }));
+    res.json({ tracks: mappedTracks });
+  } catch (err) {
+    console.error(`Failed to fetch Spotify playlist:`, err.message);
+    res.status(500).json({ error: `Failed to fetch Spotify playlist: ${err.message}` });
   }
 });
 
