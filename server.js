@@ -365,6 +365,8 @@ app.get('/spotify-playlist', async (req, res) => {
     console.error(`Failed to fetch Spotify playlist:`, err.message);
     res.status(500).json({ error: `Failed to fetch Spotify playlist: ${err.message}` });
   }
+});
+
 app.get('/callback', (req, res) => {
   const html = `
     <!DOCTYPE html>
