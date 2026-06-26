@@ -365,6 +365,31 @@ app.get('/spotify-playlist', async (req, res) => {
     console.error(`Failed to fetch Spotify playlist:`, err.message);
     res.status(500).json({ error: `Failed to fetch Spotify playlist: ${err.message}` });
   }
+app.get('/callback', (req, res) => {
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><title>Completing Sign-In</title></head>
+    <body style="font-family: sans-serif; text-align: center; margin-top: 50px; background-color: #0A0914; color: white;">
+        <h2>Completing Sign-In...</h2>
+        <script>
+            if (window.location.hash) {
+                const hash = window.location.hash.substring(1);
+                fetch("http://localhost:5999/token?" + hash)
+                    .then(() => {
+                        document.body.innerHTML = "<h2 style='color: #10F0B0; text-align: center; margin-top: 50px;'>Sign-In Successful!</h2><p>You can close this tab and return to the app.</p>";
+                    })
+                    .catch(err => {
+                        document.body.innerHTML = "<h2 style='color: #ec4899; text-align: center; margin-top: 50px;'>Authentication failed. Could not communicate with local desktop app.</h2>";
+                    });
+            } else {
+                document.body.innerHTML = "<h2 style='color: #ec4899; text-align: center; margin-top: 50px;'>Authentication failed. No token found in URL hash.</h2>";
+            }
+        </script>
+    </body>
+    </html>
+  `;
+  res.send(html);
 });
 
 app.listen(PORT, '0.0.0.0', () => {
