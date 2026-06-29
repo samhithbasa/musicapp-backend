@@ -394,6 +394,95 @@ app.get('/callback', (req, res) => {
   res.send(html);
 });
 
+// GET /search?q=xxx
+app.get('/search', async (req, res) => {
+  const { q } = req.query;
+  if (!q) {
+    return res.status(400).json({ error: 'Missing query' });
+  }
+  try {
+    const args = [
+      '--flat-playlist',
+      '--dump-single-json',
+      '--no-warnings',
+      '--js-runtimes', `node:${process.execPath}`,
+      `ytsearch20:${q}`
+    ];
+    const stdout = await runYtdlp(args);
+    const parsed = JSON.parse(stdout);
+    const results = (parsed.entries || []).map(entry => {
+      const thumbUrl = entry.thumbnails?.[entry.thumbnails.length - 1]?.url || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`;
+      return {
+        id: entry.id,
+        title: entry.title,
+        artists: entry.uploader || 'Unknown Artist',
+        album: null,
+        thumbnailUrl: thumbUrl,
+        durationSeconds: Math.floor(entry.duration || 0)
+      };
+    });
+    res.json(results);
+  } catch (err) {
+    console.error('Search failed:', err.message);
+    res.status(500).json({ error: `Search failed: ${err.message}` });
+  }
+});
+
+// GET /resolve?videoId=xxx
+app.get('/resolve', async (req, res) => {
+  const { videoId } = req.query;
+  if (!videoId) {
+    return res.status(400).json({ error: 'Missing videoId' });
+  }
+  try {
+    const args = [
+      '-f', 'bestaudio[ext=webm]/bestaudio/best',
+      '-g',
+      '--no-warnings',
+      '--no-playlist',
+      '--no-check-certificates',
+      '--js-runtimes', `node:${process.execPath}`,
+      `https://www.youtube.com/watch?v=${videoId}`
+    ];
+    const stdout = await runYtdlp(args);
+    const url = stdout.trim();
+    res.json({ url });
+  } catch (err) {
+    console.error('Resolve failed:', err.message);
+    res.status(500).json({ error: `Resolve failed: ${err.message}` });
+  }
+});
+
+// GET /details?videoId=xxx
+app.get('/details', async (req, res) => {
+  const { videoId } = req.query;
+  if (!videoId) {
+    return res.status(400).json({ error: 'Missing videoId' });
+  }
+  try {
+    const args = [
+      '--dump-single-json',
+      '--no-warnings',
+      '--js-runtimes', `node:${process.execPath}`,
+      `https://www.youtube.com/watch?v=${videoId}`
+    ];
+    const stdout = await runYtdlp(args);
+    const entry = JSON.parse(stdout);
+    const thumbUrl = entry.thumbnails?.[entry.thumbnails.length - 1]?.url || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`;
+    res.json({
+      id: entry.id,
+      title: entry.title,
+      artists: entry.uploader || 'Unknown Artist',
+      album: null,
+      thumbnailUrl: thumbUrl,
+      durationSeconds: Math.floor(entry.duration || 0)
+    });
+  } catch (err) {
+    console.error('Details failed:', err.message);
+    res.status(500).json({ error: `Details failed: ${err.message}` });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`HD Video Merging Backend listening on port ${PORT}`);
   console.log(`Using yt-dlp at: ${ytdlpPath}`);
