@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -6,12 +7,65 @@ const { execFile, execSync } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 const spotifyUrlInfo = require('spotify-url-info');
 const { getTracks } = spotifyUrlInfo(fetch);
+const rateLimit = require('express-rate-limit');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
+const BACKEND_API_KEY = process.env.BACKEND_API_KEY || 'musicapp-secure-backend-key-change-me';
 
-app.use(cors());
+// ── CORS: restrict to allowed origins (loaded dynamically from env) ─────────
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : [];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'));
+  }
+}));
 app.use(express.json());
+
+// ── Rate limiting ───────────────────────────────────────────────────────────
+const apiLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 60,                  // 60 requests per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' }
+});
+// Apply to all routes except /stream (media player sends many range requests)
+app.use((req, res, next) => {
+  if (req.path === '/stream') return next();
+  apiLimiter(req, res, next);
+});
+
+// ── Input validation helpers ────────────────────────────────────────────────
+const YOUTUBE_ID_REGEX = /^[a-zA-Z0-9_-]{11}$/;
+function isValidVideoId(id) {
+  return typeof id === 'string' && YOUTUBE_ID_REGEX.test(id);
+}
+function isValidSpotifyUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.endsWith('spotify.com');
+  } catch {
+    return false;
+  }
+}
+
+// ── API key authentication middleware ───────────────────────────────────────
+function verifyApiKey(req, res, next) {
+  const key = req.headers['x-api-key'] || req.query.apiKey;
+  if (!key || key !== BACKEND_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+// Apply to all routes
+app.use(verifyApiKey);
 
 const TEMP_DIR = path.join(__dirname, 'temp');
 if (!fs.existsSync(TEMP_DIR)) {
@@ -55,6 +109,9 @@ app.get('/status', (req, res) => {
   if (!videoId) {
     return res.status(400).json({ error: 'Missing videoId' });
   }
+  if (!isValidVideoId(videoId)) {
+    return res.status(400).json({ error: 'Invalid videoId format' });
+  }
 
   const finalPath = path.join(TEMP_DIR, `${videoId}_1080p.mp4`);
   if (fs.existsSync(finalPath)) {
@@ -64,7 +121,7 @@ app.get('/status', (req, res) => {
   if (activeJobs.has(videoId)) {
     const job = activeJobs.get(videoId);
     if (job.error) {
-      return res.json({ status: 'error', error: job.error });
+      return res.json({ status: 'error', error: 'Video preparation failed' });
     }
     return res.json({ status: 'preparing', progress: job.progress });
   }
@@ -77,6 +134,9 @@ app.post('/prepare', async (req, res) => {
   const { videoId } = req.body;
   if (!videoId) {
     return res.status(400).json({ error: 'Missing videoId' });
+  }
+  if (!isValidVideoId(videoId)) {
+    return res.status(400).json({ error: 'Invalid videoId format' });
   }
 
   const finalPath = path.join(TEMP_DIR, `${videoId}_1080p.mp4`);
@@ -96,7 +156,7 @@ app.post('/prepare', async (req, res) => {
 
   // Check yt-dlp binary exists
   if (!fs.existsSync(ytdlpPath)) {
-    return res.status(500).json({ error: 'yt-dlp binary not found. Place yt-dlp.exe in the backend directory.' });
+    return res.status(500).json({ error: 'Server configuration error' });
   }
 
   // Start merge in background
@@ -107,7 +167,7 @@ app.post('/prepare', async (req, res) => {
   // Run the merging task in background
   runMergeJob(videoId).catch(err => {
     console.error(`Error in merge job for ${videoId}:`, err);
-    activeJobs.set(videoId, { progress: 'Error', error: err.message });
+    activeJobs.set(videoId, { progress: 'Error', error: 'Video preparation failed' });
   });
 });
 
@@ -276,6 +336,9 @@ app.get('/stream', (req, res) => {
   if (!videoId) {
     return res.status(400).json({ error: 'Missing videoId' });
   }
+  if (!isValidVideoId(videoId)) {
+    return res.status(400).json({ error: 'Invalid videoId format' });
+  }
 
   const finalPath = path.join(TEMP_DIR, `${videoId}_1080p.mp4`);
   if (!fs.existsSync(finalPath)) {
@@ -352,6 +415,11 @@ app.get('/spotify-playlist', async (req, res) => {
     url = match[1];
   }
 
+  // Validate that this is actually a Spotify URL
+  if (!isValidSpotifyUrl(url)) {
+    return res.status(400).json({ error: 'Invalid Spotify URL' });
+  }
+
   try {
     console.log(`Fetching Spotify playlist tracks for URL: ${url}`);
     const tracks = await getTracks(url);
@@ -363,7 +431,7 @@ app.get('/spotify-playlist', async (req, res) => {
     res.json({ tracks: mappedTracks });
   } catch (err) {
     console.error(`Failed to fetch Spotify playlist:`, err.message);
-    res.status(500).json({ error: `Failed to fetch Spotify playlist: ${err.message}` });
+    res.status(500).json({ error: 'Failed to fetch Spotify playlist. Please check the URL and try again.' });
   }
 });
 
@@ -397,16 +465,18 @@ app.get('/callback', (req, res) => {
 // GET /search?q=xxx
 app.get('/search', async (req, res) => {
   const { q } = req.query;
-  if (!q) {
+  if (!q || typeof q !== 'string' || q.trim().length === 0) {
     return res.status(400).json({ error: 'Missing query' });
   }
+  // Limit query length to prevent abuse
+  const sanitizedQuery = q.trim().substring(0, 200);
   try {
     const args = [
       '--flat-playlist',
       '--dump-single-json',
       '--no-warnings',
       '--js-runtimes', `node:${process.execPath}`,
-      `ytsearch20:${q}`
+      `ytsearch20:${sanitizedQuery}`
     ];
     const stdout = await runYtdlp(args);
     const parsed = JSON.parse(stdout);
@@ -424,7 +494,7 @@ app.get('/search', async (req, res) => {
     res.json(results);
   } catch (err) {
     console.error('Search failed:', err.message);
-    res.status(500).json({ error: `Search failed: ${err.message}` });
+    res.status(500).json({ error: 'Search failed. Please try again.' });
   }
 });
 
@@ -433,6 +503,9 @@ app.get('/resolve', async (req, res) => {
   const { videoId } = req.query;
   if (!videoId) {
     return res.status(400).json({ error: 'Missing videoId' });
+  }
+  if (!isValidVideoId(videoId)) {
+    return res.status(400).json({ error: 'Invalid videoId format' });
   }
   try {
     const args = [
@@ -449,7 +522,7 @@ app.get('/resolve', async (req, res) => {
     res.json({ url });
   } catch (err) {
     console.error('Resolve failed:', err.message);
-    res.status(500).json({ error: `Resolve failed: ${err.message}` });
+    res.status(500).json({ error: 'Failed to resolve stream URL' });
   }
 });
 
@@ -458,6 +531,9 @@ app.get('/details', async (req, res) => {
   const { videoId } = req.query;
   if (!videoId) {
     return res.status(400).json({ error: 'Missing videoId' });
+  }
+  if (!isValidVideoId(videoId)) {
+    return res.status(400).json({ error: 'Invalid videoId format' });
   }
   try {
     const args = [
@@ -479,7 +555,7 @@ app.get('/details', async (req, res) => {
     });
   } catch (err) {
     console.error('Details failed:', err.message);
-    res.status(500).json({ error: `Details failed: ${err.message}` });
+    res.status(500).json({ error: 'Failed to fetch video details' });
   }
 });
 

@@ -3,3 +3,5 @@ temp/
 yt-dlp.exe
 yt-dlp
 package-lock.json
+.env
+
